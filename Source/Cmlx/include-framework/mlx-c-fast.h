@@ -196,6 +196,23 @@ int mlx_fast_scaled_dot_product_attention(
     const mlx_array mask_arr /* may be null */,
     const mlx_array sinks /* may be null */,
     const mlx_stream s);
+int mlx_fast_quantized_scaled_dot_product_attention(
+    mlx_array* res,
+    const mlx_array queries,
+    const mlx_array keys,
+    const mlx_array key_scales,
+    const mlx_array key_biases /* may be null */,
+    const mlx_array values,
+    const mlx_array value_scales,
+    const mlx_array value_biases /* may be null */,
+    float scale,
+    const mlx_array mask /* may be null */,
+    const mlx_array sinks /* may be null */,
+    int group_size,
+    int bits,
+    const char* mode,
+    bool causal,
+    const mlx_stream s);
 
 /**@}*/
 

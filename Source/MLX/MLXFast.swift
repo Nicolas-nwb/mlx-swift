@@ -217,6 +217,51 @@ public enum MLXFast {
         return MLXArray(result)
     }
 
+    /// A fast implementation of quantized multi-head attention: `O = softmax(Q @ K.T) @ V`
+    /// where K and V are quantized.
+    ///
+    /// Supports affine and MXFP4 quantization modes.
+    ///
+    /// - Parameters:
+    ///   - queries: queries with shape `[B, N_q, T_q, D]`
+    ///   - keys: quantized keys
+    ///   - keyScales: scales for dequantizing keys
+    ///   - keyBiases: optional biases for dequantizing keys (affine mode)
+    ///   - values: quantized values
+    ///   - valueScales: scales for dequantizing values
+    ///   - valueBiases: optional biases for dequantizing values (affine mode)
+    ///   - scale: scale for queries, typically `1 / sqrt(q.dim(-1))`
+    ///   - mask: optional mask array
+    ///   - sinks: optional array of attention sinks
+    ///   - groupSize: quantization group size (default 32)
+    ///   - bits: quantization bits (default 4)
+    ///   - mode: quantization mode, `"affine"` or `"mxfp4"` (default `"mxfp4"`)
+    ///   - causal: if true, apply causal masking
+    ///   - stream: stream to evaluate on
+    public static func quantizedScaledDotProductAttention(
+        queries: MLXArray, keys: MLXArray, keyScales: MLXArray,
+        keyBiases: MLXArray? = nil, values: MLXArray, valueScales: MLXArray,
+        valueBiases: MLXArray? = nil, scale: Float, mask: MLXArray? = nil,
+        sinks: MLXArray? = nil, groupSize: Int = 32, bits: Int = 4,
+        mode: String = "mxfp4", causal: Bool = false,
+        stream: StreamOrDevice = .default
+    ) -> MLXArray {
+        var result = mlx_array_new()
+        mlx_fast_quantized_scaled_dot_product_attention(
+            &result,
+            queries.ctx, keys.ctx, keyScales.ctx,
+            (keyBiases ?? .mlxNone).ctx,
+            values.ctx, valueScales.ctx,
+            (valueBiases ?? .mlxNone).ctx,
+            scale,
+            (mask ?? .mlxNone).ctx,
+            (sinks ?? .mlxNone).ctx,
+            Int32(groupSize), Int32(bits),
+            mode, causal,
+            stream.ctx)
+        return MLXArray(result)
+    }
+
     /// Root Mean Square normalization (RMS norm).
     ///
     /// The normalization is with respect to the last axis of the input `x`.
