@@ -129,6 +129,10 @@ let cmlx = Target.target(
         // these are selected conditionally
         "mlx/mlx/backend/no_cpu/compiled.cpp",
 
+        // Dossier de build CMake local (peut contenir des main.cpp de doctest
+        // qui perturbent la detection library/executable par SwiftPM).
+        "mlx/build-tests",
+
         // mlx files that are not part of the build
         "mlx/ACKNOWLEDGMENTS.md",
         "mlx/CMakeLists.txt",
