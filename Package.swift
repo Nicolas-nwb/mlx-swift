@@ -131,7 +131,11 @@ let cmlx = Target.target(
 
         // Dossier de build CMake local (peut contenir des main.cpp de doctest
         // qui perturbent la detection library/executable par SwiftPM).
+        // build-tests : nom historique. build : nom standard cmake (`cmake -B build`)
+        // qui déclenche le même bug — SwiftPM voit `_deps/doctest-src/scripts/
+        // hello_world.cpp` (contient main()) et classifie Cmlx en executable.
         "mlx/build-tests",
+        "mlx/build",
 
         // mlx files that are not part of the build
         "mlx/ACKNOWLEDGMENTS.md",
