@@ -199,6 +199,14 @@ constant int q_seq_len [[function_constant(31)]];
 // L'implémentation butterfly intra-thread / cross-warp arrive en commit 2.
 constant bool apply_wht_inline [[function_constant(32)]];
 
+// Task #22 : flags de bisection pour isoler la phase R3 qui produit nan en prod.
+// Activés via env vars MLX_R3_BYPASS_Q=1 / MLX_R3_BYPASS_OUT=1 côté Swift.
+// Quand bypass_q_wht=true, le kernel skip le butterfly Q-side (Phase 1-4 Q).
+// Quand bypass_out_wht=true, le kernel prend le path baseline reduction
+// + writeback au lieu du Phase 1-4 output-side WHT_inv.
+constant bool bypass_q_wht [[function_constant(33)]];
+constant bool bypass_out_wht [[function_constant(34)]];
+
 template <int group_size, int elem_per_thread, int granularity>
 struct GroupSlice {
   enum : int {
@@ -522,7 +530,8 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
   // Le `commit 3` ajoute la transformation inverse sur o[] avant l'ecriture.
   // L'ordre des butterflies (intra puis cross) reproduit le pattern Cooley-
   // Tukey de l'implementation MLX `hadamardTransform` (cf. Annexe B memo R3).
-  if (apply_wht_inline) {
+  // Task #22 : bypass_q_wht=true skip ce bloc pour bisection prod nan.
+  if (apply_wht_inline && !bypass_q_wht) {
     const int q_base = local_quad_lid * elem_per_thread;
 
     // 1. Multiplie Q par les signes WHT (lecture device->thread).
@@ -663,7 +672,8 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
   // par signs, on normalise, puis writeback.
   // Reuse de q[] economise un second tableau de elem_per_thread fp32 (256 octets
   // pour D=512 BD=8) qui aurait sature les registres.
-  if (apply_wht_inline) {
+  // Task #22 : bypass_out_wht=true force le path baseline (else branch).
+  if (apply_wht_inline && !bypass_out_wht) {
     // Phase 1 : reduction cross-quad dans q[] (au lieu de val temporaire).
 #pragma clang loop unroll(full)
     for (int i = 0; i < elem_per_thread; i++) {
