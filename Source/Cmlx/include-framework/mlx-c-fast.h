@@ -212,6 +212,7 @@ int mlx_fast_quantized_scaled_dot_product_attention(
     int bits,
     const char* mode,
     bool causal,
+    const mlx_array wht_signs /* may be null, R3 Task #19 */,
     const mlx_stream s);
 
 /**@}*/

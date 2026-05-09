@@ -244,8 +244,14 @@ public enum MLXFast {
         valueBiases: MLXArray? = nil, scale: Float, mask: MLXArray? = nil,
         sinks: MLXArray? = nil, groupSize: Int = 32, bits: Int = 4,
         mode: String = "mxfp4", causal: Bool = false,
+        whtSigns: MLXArray? = nil,
         stream: StreamOrDevice = .default
     ) -> MLXArray {
+        // R3 (Task #19, mai 2026) : `whtSigns` opt-in for inline Walsh-Hadamard
+        // transform fusion. When provided (1D array of ±1.0 with size = head_dim),
+        // the kernel applies WHT(Q) at the start and WHT_inv(out) at the end,
+        // saving 2 kernel launches vs an external `WalshHadamardTransform.applyMetal/inverseMetal`
+        // pair. When `nil`, behavior is identical to pre-R3 (baseline path).
         var result = mlx_array_new()
         mlx_fast_quantized_scaled_dot_product_attention(
             &result,
@@ -258,6 +264,7 @@ public enum MLXFast {
             (sinks ?? .mlxNone).ctx,
             Int32(groupSize), Int32(bits),
             mode, causal,
+            (whtSigns ?? .mlxNone).ctx,
             stream.ctx)
         return MLXArray(result)
     }
