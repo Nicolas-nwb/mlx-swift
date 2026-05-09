@@ -188,6 +188,17 @@ constant int quant_group_size [[function_constant(30)]];
 // On retrouve block_idx et q_seq_idx en décomposant tid.z.
 constant int q_seq_len [[function_constant(31)]];
 
+// R3 (Task #19, mai 2026) : fusion WHT inline dans le kernel quant SDPA.
+// Quand actif, le kernel applique WHT(Q) au début + WHT_inv(out) à la fin
+// du kernel pass-1 au lieu de 2 kernel launches Metal séparés côté Swift
+// (Gemma4Attention.quantizedSDPAImpl). Économise 2 kernel launches sur 4
+// par SDPA call (~24 µs/call * 30 layers * N tokens).
+// Le buffer signs[D] (function_constant(apply_wht_inline)) porte les signes
+// WHT randomisés (générés par TurboQuantKVCache.whtSigns).
+// Squelette R3 commit 1 : FC déclaré + buffer optionnel + branche stub.
+// L'implémentation butterfly intra-thread / cross-warp arrive en commit 2.
+constant bool apply_wht_inline [[function_constant(32)]];
+
 template <int group_size, int elem_per_thread, int granularity>
 struct GroupSlice {
   enum : int {
@@ -394,6 +405,7 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
     const device uint8_t* key_biases_raw,
     const device uint8_t* value_biases_raw,
     const device T* sinks,
+    const device T* wht_signs,
     uint3 tid,
     uint3 tpg,
     uint3 tptg,
@@ -499,6 +511,24 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
 #pragma clang loop unroll(full)
   for (int i = 0; i < elem_per_thread; i++) {
     q[i] = static_cast<U>(scale) * queries[i];
+  }
+
+  // R3 (Task #19, mai 2026) STUB : application WHT inline sur Q.
+  // Quand `apply_wht_inline=true`, on applique q[i] *= signs[i] puis butterfly
+  // (intra-thread + cross-warp via simd_shuffle_xor) puis normalisation
+  // 1/sqrt(D). Squelette commit 1 : multiplication par signs uniquement.
+  // Le butterfly arrive en commit 2 ; la normalisation est integree au scale
+  // du kernel (mais voir commit 2 pour le partage scale * signs * (1/sqrt(D))).
+  // Tant que le butterfly n'est pas implemente, ce branch ne doit jamais etre
+  // active en runtime : Swift tient apply_wht_inline=false par defaut.
+  if (apply_wht_inline) {
+    // Stub : applique uniquement les signes, pas le butterfly.
+    // Bit-exact avec WHT externe en commit 2 quand le butterfly est cable.
+    const int q_base = local_quad_lid * elem_per_thread;
+#pragma clang loop unroll(full)
+    for (int i = 0; i < elem_per_thread; i++) {
+      q[i] *= static_cast<U>(wht_signs[q_base + i]);
+    }
   }
 
   U max_score = Limits<U>::finite_min;
@@ -623,6 +653,8 @@ template <typename T, int D>
     const device uint8_t* value_biases
     [[buffer(21), function_constant(has_affine_bias)]],
     const device T* sinks [[buffer(22), function_constant(has_sinks)]],
+    const device T* wht_signs
+    [[buffer(23), function_constant(apply_wht_inline)]],
     uint3 tid [[threadgroup_position_in_grid]],
     uint3 tpg [[threadgroups_per_grid]],
     uint3 tptg [[threads_per_threadgroup]],
@@ -654,6 +686,7 @@ template <typename T, int D>
         key_biases,                                                       \
         value_biases,                                                     \
         sinks,                                                            \
+        wht_signs,                                                        \
         tid,                                                              \
         tpg,                                                              \
         tptg,                                                             \
