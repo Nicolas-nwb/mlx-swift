@@ -513,21 +513,63 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
     q[i] = static_cast<U>(scale) * queries[i];
   }
 
-  // R3 (Task #19, mai 2026) STUB : application WHT inline sur Q.
-  // Quand `apply_wht_inline=true`, on applique q[i] *= signs[i] puis butterfly
-  // (intra-thread + cross-warp via simd_shuffle_xor) puis normalisation
-  // 1/sqrt(D). Squelette commit 1 : multiplication par signs uniquement.
-  // Le butterfly arrive en commit 2 ; la normalisation est integree au scale
-  // du kernel (mais voir commit 2 pour le partage scale * signs * (1/sqrt(D))).
-  // Tant que le butterfly n'est pas implemente, ce branch ne doit jamais etre
-  // active en runtime : Swift tient apply_wht_inline=false par defaut.
+  // R3 (Task #19, mai 2026) commit 2 : application WHT inline sur Q.
+  // Sequence : sign flip -> butterfly intra-thread -> butterfly cross-warp
+  // (simd_shuffle_xor) -> normalisation 1/sqrt(D).
+  // Equivalent mathematique de WalshHadamardTransform.applyMetal cote Swift,
+  // mais sans round-trip threadgroup memory ni kernel launch separe (-2 launches
+  // sur 4 par SDPA call).
+  // Le `commit 3` ajoute la transformation inverse sur o[] avant l'ecriture.
+  // L'ordre des butterflies (intra puis cross) reproduit le pattern Cooley-
+  // Tukey de l'implementation MLX `hadamardTransform` (cf. Annexe B memo R3).
   if (apply_wht_inline) {
-    // Stub : applique uniquement les signes, pas le butterfly.
-    // Bit-exact avec WHT externe en commit 2 quand le butterfly est cable.
     const int q_base = local_quad_lid * elem_per_thread;
+
+    // 1. Multiplie Q par les signes WHT (lecture device->thread).
 #pragma clang loop unroll(full)
     for (int i = 0; i < elem_per_thread; i++) {
       q[i] *= static_cast<U>(wht_signs[q_base + i]);
+    }
+
+    // 2. Butterfly intra-thread (stride 1..elem_per_thread/2, en place).
+    //    Pattern Cooley-Tukey: paires (i, i^stride) -> (a+b, a-b).
+#pragma clang loop unroll(full)
+    for (int stride = 1; stride < elem_per_thread; stride <<= 1) {
+#pragma clang loop unroll(full)
+      for (int i = 0; i < elem_per_thread; i++) {
+        if ((i & stride) == 0) {
+          U a = q[i];
+          U b = q[i ^ stride];
+          q[i] = a + b;
+          q[i ^ stride] = a - b;
+        }
+      }
+    }
+
+    // 3. Butterfly cross-thread via simd_shuffle_xor.
+    //    stride elem_per_thread..D/2 dans le repere global ;
+    //    converti en lane_stride dans le repere du quad (lanes 0..BD-1).
+    //    Pour D=512 BD=8 : stride 64,128,256 -> lane_stride 1,2,4.
+    //    Pour D=256 BD=4 : stride 64,128 -> lane_stride 1,2.
+    //    Le bit `is_high` du local_quad_lid determine si la lane recoit
+    //    (a+b) ou (a-b) du pair.
+#pragma clang loop unroll(full)
+    for (int stride = elem_per_thread; stride < D; stride <<= 1) {
+      const int lane_stride = stride / elem_per_thread;
+      const bool is_high = (local_quad_lid & lane_stride) != 0;
+#pragma clang loop unroll(full)
+      for (int i = 0; i < elem_per_thread; i++) {
+        U other = simd_shuffle_xor(q[i], lane_stride);
+        q[i] = is_high ? (other - q[i]) : (q[i] + other);
+      }
+    }
+
+    // 4. Normalisation 1/sqrt(D) (Hadamard est orthogonal modulo 1/sqrt(D)
+    //    par direction ; H @ H = D * I, donc apply suivi de inv = identite).
+    const U norm = U(1.0) / metal::sqrt(U(D));
+#pragma clang loop unroll(full)
+    for (int i = 0; i < elem_per_thread; i++) {
+      q[i] *= norm;
     }
   }
 
@@ -613,13 +655,74 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
 
   // Reduction cross-groupes (stride commence a BD pour ne pas croiser intra-groupe)
   U rescale = fast::exp(max_score - global_max);
-  for (int i = 0; i < elem_per_thread; i++) {
-    U val = o[i] * rescale;
-    for (int stride = BD; stride < 32; stride <<= 1) {
-      val += simd_shuffle_xor(val, stride);
+
+  // R3 (Task #19, mai 2026) commit 3 : application WHT_inv inline sur la sortie.
+  // Sans R3 : reduction inline + writeback en une passe.
+  // Avec R3 : on materialise le resultat de la reduction dans q[] (registres
+  // libres apres la main loop), on applique butterfly sur q[], on multiplie
+  // par signs, on normalise, puis writeback.
+  // Reuse de q[] economise un second tableau de elem_per_thread fp32 (256 octets
+  // pour D=512 BD=8) qui aurait sature les registres.
+  if (apply_wht_inline) {
+    // Phase 1 : reduction cross-quad dans q[] (au lieu de val temporaire).
+#pragma clang loop unroll(full)
+    for (int i = 0; i < elem_per_thread; i++) {
+      U val = o[i] * rescale;
+#pragma clang loop unroll(full)
+      for (int stride = BD; stride < 32; stride <<= 1) {
+        val += simd_shuffle_xor(val, stride);
+      }
+      q[i] = val;
     }
+
+    // Phase 2 : butterfly intra-thread sur q[] (== sortie reduite).
+#pragma clang loop unroll(full)
+    for (int stride = 1; stride < elem_per_thread; stride <<= 1) {
+#pragma clang loop unroll(full)
+      for (int i = 0; i < elem_per_thread; i++) {
+        if ((i & stride) == 0) {
+          U a = q[i];
+          U b = q[i ^ stride];
+          q[i] = a + b;
+          q[i ^ stride] = a - b;
+        }
+      }
+    }
+
+    // Phase 3 : butterfly cross-thread (lanes du meme quad).
+#pragma clang loop unroll(full)
+    for (int stride = elem_per_thread; stride < D; stride <<= 1) {
+      const int lane_stride = stride / elem_per_thread;
+      const bool is_high = (local_quad_lid & lane_stride) != 0;
+#pragma clang loop unroll(full)
+      for (int i = 0; i < elem_per_thread; i++) {
+        U other = simd_shuffle_xor(q[i], lane_stride);
+        q[i] = is_high ? (other - q[i]) : (q[i] + other);
+      }
+    }
+
+    // Phase 4 : signs * 1/sqrt(D), puis writeback (lanes local_quad_gid==0).
+    // Note : signs appliquees apres butterfly pour rester coherent avec
+    // la composition WHT_inv(WHT_apply(x)) = x (pour signs ∈ {-1, +1}).
+    const U norm = U(1.0) / metal::sqrt(U(D));
+    const int q_base = local_quad_lid * elem_per_thread;
     if (local_quad_gid == 0) {
-      out[i] = static_cast<T>(val);
+#pragma clang loop unroll(full)
+      for (int i = 0; i < elem_per_thread; i++) {
+        out[i] = static_cast<T>(
+            q[i] * static_cast<U>(wht_signs[q_base + i]) * norm);
+      }
+    }
+  } else {
+    // Path baseline : reduction inline + writeback (comportement pre-R3).
+    for (int i = 0; i < elem_per_thread; i++) {
+      U val = o[i] * rescale;
+      for (int stride = BD; stride < 32; stride <<= 1) {
+        val += simd_shuffle_xor(val, stride);
+      }
+      if (local_quad_gid == 0) {
+        out[i] = static_cast<T>(val);
+      }
     }
   }
 }
