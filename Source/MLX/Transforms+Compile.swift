@@ -33,7 +33,9 @@ final class CompiledFunction: @unchecked (Sendable) {
 
     deinit {
         // remove the compiled structure from the back end
-        mlx_detail_compile_erase(id)
+        withErrorHandler({ _ in }) {
+            _ = mlx_detail_compile_erase(id)
+        }
     }
 
     func call(_ arguments: [MLXArray]) -> [MLXArray] {
@@ -88,11 +90,12 @@ final class CompiledFunction: @unchecked (Sendable) {
         // but will be able to re-evaluate with fresh state if needed
         evalLock.lock()
         var compiled = mlx_closure_new()
-        mlx_detail_compile(&compiled, innerClosure, id, shapeless, [], 0)
+        let compileStatus = mlx_detail_compile(&compiled, innerClosure, id, shapeless, [], 0)
         defer {
             mlx_closure_free(compiled)
             evalLock.unlock()
         }
+        guard compileStatus == 0 else { return [] }
 
         let innerInputs = arguments + stateInputs
         let innerInputsVector = new_mlx_vector_array(innerInputs)
@@ -101,8 +104,9 @@ final class CompiledFunction: @unchecked (Sendable) {
         // will compile the function (if needed) and evaluate the
         // compiled graph
         var resultVector = mlx_vector_array_new()
-        mlx_closure_apply(&resultVector, compiled, innerInputsVector)
+        let applyStatus = mlx_closure_apply(&resultVector, compiled, innerInputsVector)
         defer { mlx_vector_array_free(resultVector) }
+        guard applyStatus == 0 else { return [] }
 
         let resultsPlusStateOutput = mlx_vector_array_values(resultVector)
 
@@ -113,10 +117,17 @@ final class CompiledFunction: @unchecked (Sendable) {
             s._updateInternal(newValues)
         }
 
+        guard resultsPlusStateOutput.count >= stateOutput.count else {
+            return []
+        }
         let resultLength = resultsPlusStateOutput.count - stateOutput.count
         let results = Array(resultsPlusStateOutput.prefix(resultLength))
         return results
     }
+}
+
+private func firstCompiledResult(_ results: [MLXArray]) -> MLXArray {
+    results.first ?? .mlxNone
 }
 
 /// Returns a compiled function that produces the same output as `f()`.
@@ -164,7 +175,7 @@ public func compile(
     }
 
     return { a in
-        compileState.call([a])[0]
+        firstCompiledResult(compileState.call([a]))
     }
 }
 
@@ -185,7 +196,7 @@ public func compile(
     }
 
     return { a, b in
-        compileState.call([a, b])[0]
+        firstCompiledResult(compileState.call([a, b]))
     }
 }
 
@@ -206,7 +217,7 @@ public func compile(
     }
 
     return { a, b, c in
-        compileState.call([a, b, c])[0]
+        firstCompiledResult(compileState.call([a, b, c]))
     }
 }
 

@@ -78,6 +78,23 @@ class ErrorTests: XCTestCase {
         }
     }
 
+    func testWithErrorThrowFromCompiledSingleOutput() {
+        let compiled = compile { x in
+            x + MLXArray(0 ..< 15, [3, 5])
+        }
+
+        do {
+            try withError {
+                _ = compiled(MLXArray(0 ..< 10, [2, 5]))
+            }
+            XCTFail("should throw")
+        } catch let error as MLXError {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testWithErrorThrowAsync() async {
         do {
             try await withError {
