@@ -289,9 +289,6 @@ open class Module {
                     }
                 }
                 return isAllNone ? .none : .array(result)
-
-            default:
-                fatalError("Unexpected leaf \(vk) = \(v)")
             }
         }
 
