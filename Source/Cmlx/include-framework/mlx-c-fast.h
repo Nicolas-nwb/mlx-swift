@@ -97,7 +97,12 @@ int mlx_fast_layer_norm(
     const mlx_array bias /* may be null */,
     float eps,
     const mlx_stream s);
-
+int mlx_fast_argmax_addmm(
+    mlx_array* res,
+    const mlx_array c,
+    const mlx_array a,
+    const mlx_array b,
+    const mlx_stream s);
 typedef struct mlx_fast_metal_kernel_config_ {
   void* ctx;
 } mlx_fast_metal_kernel_config;

@@ -37,6 +37,17 @@ public enum MLXFast {
         return MLXArray(result)
     }
 
+    public static func argmaxAddMM(
+        _ c: MLXArray,
+        _ a: MLXArray,
+        _ b: MLXArray,
+        stream: StreamOrDevice = .default
+    ) -> MLXArray {
+        var result = mlx_array_new()
+        mlx_fast_argmax_addmm(&result, c.ctx, a.ctx, b.ctx, stream.ctx)
+        return MLXArray(result)
+    }
+
     /// Optimized implementation of `NN.RoPE` with array offset for batched inference.
     ///
     /// This overload accepts an array offset, allowing different position offsets for each
