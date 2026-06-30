@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -22,6 +23,12 @@ MLX_API array layer_norm(
     const std::optional<array>& weight,
     const std::optional<array>& bias,
     float eps,
+    StreamOrDevice s = {});
+
+MLX_API array argmax_addmm(
+    const array& c,
+    const array& a,
+    const array& b,
     StreamOrDevice s = {});
 
 MLX_API array rope(
@@ -53,6 +60,33 @@ MLX_API array scaled_dot_product_attention(
     const std::string& mask_mode = "",
     std::optional<array> mask_arr = {},
     const std::optional<array>& sinks = {},
+    StreamOrDevice s = {});
+
+/** Computes: `O = softmax(Q @ K.T) @ V` where K and V are quantized.
+ *
+ *  R3 (Task #19, mai 2026) : `wht_signs` opt-in for Walsh-Hadamard transform
+ *  fusion inside the Metal kernel (`apply_wht_inline` function_constant).
+ *  When provided (1D array of ±1.0 with size = head_dim), the kernel applies
+ *  WHT(Q) at the start and WHT_inv(out) at the end, saving 2 kernel launches
+ *  vs an external `WalshHadamardTransform.applyMetal/inverseMetal` pair.
+ *  When `nullopt`, behavior is identical to pre-R3 (baseline path).
+ */
+MLX_API array quantized_scaled_dot_product_attention(
+    const array& queries,
+    const array& keys,
+    const array& key_scales,
+    const std::optional<array>& key_biases,
+    const array& values,
+    const array& value_scales,
+    const std::optional<array>& value_biases,
+    const float scale,
+    const std::optional<array>& mask = std::nullopt,
+    const std::optional<array>& sinks = std::nullopt,
+    std::optional<int> group_size = std::nullopt,
+    std::optional<int> bits = std::nullopt,
+    const std::string& mode = "mxfp4",
+    bool causal = false,
+    const std::optional<array>& wht_signs = std::nullopt,
     StreamOrDevice s = {});
 
 using TemplateArg = std::variant<int, bool, Dtype>;

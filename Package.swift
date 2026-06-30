@@ -131,10 +131,9 @@ let cmlx = Target.target(
 
         // Dossier de build CMake local (peut contenir des main.cpp de doctest
         // qui perturbent la detection library/executable par SwiftPM).
-        // build-tests : nom historique. build : nom standard cmake (`cmake -B build`)
-        // qui déclenche le même bug — SwiftPM voit `_deps/doctest-src/scripts/
+        // build : nom standard cmake (`cmake -B build`)
+        // qui déclenche le même bug : SwiftPM voit `_deps/doctest-src/scripts/
         // hello_world.cpp` (contient main()) et classifie Cmlx en executable.
-        "mlx/build-tests",
         "mlx/build",
 
         // mlx files that are not part of the build
@@ -202,11 +201,8 @@ let cmlx = Target.target(
         "mlx/mlx/distributed/mpi/mpi.cpp",
         "mlx/mlx/distributed/ring/ring.cpp",
         "mlx/mlx/distributed/nccl/nccl.cpp",
-        "mlx/mlx/distributed/nccl/nccl_stub",
         "mlx/mlx/distributed/jaccl/jaccl.cpp",
-        "mlx/mlx/distributed/jaccl/mesh.cpp",
-        "mlx/mlx/distributed/jaccl/ring.cpp",
-        "mlx/mlx/distributed/jaccl/utils.cpp",
+        "mlx/mlx/distributed/jaccl/lib",
     ],
     cSettings: [
         .headerSearchPath("mlx"),
@@ -217,7 +213,7 @@ let cmlx = Target.target(
         .headerSearchPath("mlx-c"),
         .headerSearchPath("json/single_include/nlohmann"),
         .headerSearchPath("fmt/include"),
-        .define("MLX_VERSION", to: "\"0.31.1\""),
+        .define("MLX_VERSION", to: "\"0.32.0\""),
     ],
     linkerSettings: linkerSettings
 )
@@ -321,24 +317,44 @@ let package = Package(
             name: "Example1",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: [
+                "CustomFunctionExample.swift",
+                "CustomFunctionExampleSimple.swift",
+                "Tutorial.swift",
+            ],
             sources: ["Example1.swift"]
         ),
         .executableTarget(
             name: "Tutorial",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: [
+                "CustomFunctionExample.swift",
+                "CustomFunctionExampleSimple.swift",
+                "Example1.swift",
+            ],
             sources: ["Tutorial.swift"]
         ),
         .executableTarget(
             name: "CustomFunctionExample",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: [
+                "CustomFunctionExampleSimple.swift",
+                "Example1.swift",
+                "Tutorial.swift",
+            ],
             sources: ["CustomFunctionExample.swift"]
         ),
         .executableTarget(
             name: "CustomFunctionExampleSimple",
             dependencies: ["MLX"],
             path: "Source/Examples",
+            exclude: [
+                "CustomFunctionExample.swift",
+                "Example1.swift",
+                "Tutorial.swift",
+            ],
             sources: ["CustomFunctionExampleSimple.swift"]
         ),
     ],

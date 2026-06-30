@@ -63,7 +63,10 @@ struct MLX_API CommandEncoder {
   int num_ops_{0};
 };
 
-MLX_API CommandEncoder& get_command_encoder(Stream stream);
+MLX_API CommandEncoder& get_command_encoder(Stream s);
+
+std::unordered_map<int, CommandEncoder>& get_command_encoders();
+std::unordered_map<int, CommandEncoder>& get_global_command_encoders();
 
 } // namespace mlx::core::cpu
 #endif

@@ -44,7 +44,6 @@ instantiate_sdpa_vector_heads(float)
 instantiate_sdpa_vector_heads(bfloat16_t)
 instantiate_sdpa_vector_heads(float16_t)
 
-// Quantized SDPA vector instantiations (PR #3026 + headDim=512 pour Gemma4 31B)
 #define instantiate_quant_sdpa_vector(type, qk_dim, value_dim)   \
   instantiate_kernel(                                             \
       "quant_sdpa_vector_2pass_1_" #type "_" #qk_dim "_" #value_dim, \

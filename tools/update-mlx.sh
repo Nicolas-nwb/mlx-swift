@@ -37,6 +37,7 @@ make \
     gather_front \
     gemm \
     gemm_nax \
+    gemv \
     gemv_masked \
     hadamard \
     logsumexp \
@@ -56,12 +57,14 @@ make \
     steel_conv \
     steel_conv_3d \
     steel_conv_general \
+    steel_gemm_argmax \
     steel_gemm_fused \
     steel_gemm_fused_nax \
     steel_gemm_gather \
     steel_gemm_gather_nax \
     steel_gemm_masked \
     steel_gemm_segmented \
+    steel_gemm_segmented_nax \
     steel_gemm_splitk \
     steel_gemm_splitk_nax \
     ternary \

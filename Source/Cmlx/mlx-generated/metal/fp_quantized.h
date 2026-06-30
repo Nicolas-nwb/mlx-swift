@@ -3,10 +3,10 @@
 #include <metal_simdgroup>
 #include <metal_stdlib>
 
-#include "mlx/backend/metal/kernels/fp4.h"
-#include "mlx/backend/metal/kernels/fp8.h"
-#include "mlx/backend/metal/kernels/steel/gemm/loader.h"
-#include "mlx/backend/metal/kernels/steel/gemm/mma.h"
+#include "fp4.h"
+#include "fp8.h"
+#include "steel/gemm/loader.h"
+#include "steel/gemm/mma.h"
 
 constant bool align_M [[function_constant(200)]];
 constant bool align_N [[function_constant(201)]];
@@ -535,6 +535,7 @@ METAL_FUNC void fp_qvm_impl(
     device T* y,
     const int in_vec_size,
     const int out_vec_size,
+    const int in_vec_stride,
     uint3 tid [[threadgroup_position_in_grid]],
     uint simd_gid [[simdgroup_index_in_threadgroup]],
     uint simd_lid [[thread_index_in_simdgroup]]) {
@@ -565,7 +566,7 @@ METAL_FUNC void fp_qvm_impl(
   int out_col = pack_factor * tn * (tid.y * num_simdgroups + simd_gid);
   ws += out_col * bytes_per_pack / pack_factor + simd_lid * out_vec_size_w;
   scales += out_col / group_size + simd_lid * out_vec_size_g;
-  x += tid.x * in_vec_size + simd_lid;
+  x += tid.x * in_vec_stride + simd_lid;
   y += tid.x * out_vec_size + out_col;
 
   if (out_col >= out_vec_size) {
@@ -644,6 +645,7 @@ METAL_FUNC void fp_qmm_t_impl(
     const constant int& K,
     const constant int& N,
     const constant int& M,
+    const constant int& K_eff,
     uint3 tid [[threadgroup_position_in_grid]],
     uint lid [[thread_index_in_threadgroup]],
     uint simd_gid [[simdgroup_index_in_threadgroup]],
@@ -697,7 +699,7 @@ METAL_FUNC void fp_qmm_t_impl(
 
   if (num_els < BM) {
     if (!aligned_N && num_outs < BN) {
-      for (int k = 0; k < K; k += BK) {
+      for (int k = 0; k < K_eff; k += BK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         loader_x.load_safe(short2(BK, num_els));
         loader_w.load_safe(short2(BK, num_outs));
@@ -707,7 +709,7 @@ METAL_FUNC void fp_qmm_t_impl(
         loader_w.next();
       }
     } else {
-      for (int k = 0; k < K; k += BK) {
+      for (int k = 0; k < K_eff; k += BK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         loader_x.load_safe(short2(BK, num_els));
         loader_w.load_unsafe();
@@ -719,7 +721,7 @@ METAL_FUNC void fp_qmm_t_impl(
     }
   } else {
     if (!aligned_N && num_outs < BN) {
-      for (int k = 0; k < K; k += BK) {
+      for (int k = 0; k < K_eff; k += BK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         loader_x.load_unsafe();
         loader_w.load_safe(short2(BK, num_outs));
@@ -729,7 +731,7 @@ METAL_FUNC void fp_qmm_t_impl(
         loader_w.next();
       }
     } else {
-      for (int k = 0; k < K; k += BK) {
+      for (int k = 0; k < K_eff; k += BK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         loader_x.load_unsafe();
         loader_w.load_unsafe();
@@ -1123,7 +1125,16 @@ template <typename T, const int group_size, int bits, bool batched>
         tid);
   }
   fp_qvm_impl<T, group_size, bits>(
-      w, scales, x, y, in_vec_size, out_vec_size, tid, simd_gid, simd_lid);
+      w,
+      scales,
+      x,
+      y,
+      in_vec_size,
+      out_vec_size,
+      in_vec_size,
+      tid,
+      simd_gid,
+      simd_lid);
 }
 
 template <typename T, const int group_size, int bits, int split_k = 32>
@@ -1165,8 +1176,20 @@ template <typename T, const int group_size, int bits, int split_k = 32>
   int in_vec_size_adj =
       tid.z % split_k == split_k - 1 ? final_block_size : in_vec_size;
 
+  // The in_vec_stride is the full K dimension, not the partition size
+  int in_vec_stride = (split_k - 1) * in_vec_size + final_block_size;
+
   fp_qvm_impl<T, group_size, bits>(
-      w, scales, x, y, in_vec_size_adj, out_vec_size, tid, simd_gid, simd_lid);
+      w,
+      scales,
+      x,
+      y,
+      in_vec_size_adj,
+      out_vec_size,
+      in_vec_stride,
+      tid,
+      simd_gid,
+      simd_lid);
 }
 
 template <
@@ -1221,7 +1244,7 @@ template <
         tid);
   }
   fp_qmm_t_impl<T, group_size, bits, aligned_N, BM, BK, BN>(
-      w, scales, x, y, Xs, Ws, K, N, M, tid, lid, simd_gid, simd_lid);
+      w, scales, x, y, Xs, Ws, K, N, M, K, tid, lid, simd_gid, simd_lid);
 }
 
 template <
@@ -1424,7 +1447,16 @@ template <typename T, int group_size, int bits>
       s_strides,
       tid);
   fp_qvm_impl<T, group_size, bits>(
-      w, scales, x, y, in_vec_size, out_vec_size, tid, simd_gid, simd_lid);
+      w,
+      scales,
+      x,
+      y,
+      in_vec_size,
+      out_vec_size,
+      in_vec_size,
+      tid,
+      simd_gid,
+      simd_lid);
 }
 
 template <
@@ -1488,7 +1520,61 @@ template <
       s_strides,
       tid);
   fp_qmm_t_impl<T, group_size, bits, aligned_N, BM, BK, BN>(
-      w, scales, x, y, Xs, Ws, K, N, M, tid, lid, simd_gid, simd_lid);
+      w, scales, x, y, Xs, Ws, K, N, M, K, tid, lid, simd_gid, simd_lid);
+}
+
+template <
+    typename T,
+    const int group_size,
+    const int bits,
+    const bool aligned_N,
+    const int BM = 32,
+    const int BK = 32,
+    const int BN = 32>
+[[kernel]] void fp_qmm_t_splitk(
+    const device uint32_t* w [[buffer(0)]],
+    const device uint8_t* scales [[buffer(1)]],
+    const device T* x [[buffer(2)]],
+    device T* y [[buffer(3)]],
+    const constant int& K [[buffer(4)]],
+    const constant int& N [[buffer(5)]],
+    const constant int& M [[buffer(6)]],
+    const constant int& k_partition_size [[buffer(7)]],
+    const constant int& split_k_partition_stride [[buffer(8)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint lid [[thread_index_in_threadgroup]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]]) {
+  (void)lid;
+
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  constexpr int pack_factor = get_pack_factor<8, bits>();
+  constexpr int bytes_per_pack = get_bytes_per_pack();
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[BN * BK_padded];
+  const int k_start = tid.z * k_partition_size;
+  x += k_start;
+
+  auto wl = (const device uint8_t*)w;
+  wl += k_start * bytes_per_pack / pack_factor;
+  scales += k_start / group_size;
+  y += tid.z * static_cast<int64_t>(split_k_partition_stride);
+
+  fp_qmm_t_impl<T, group_size, bits, aligned_N, BM, BK, BN>(
+      (const device uint32_t*)wl,
+      scales,
+      x,
+      y,
+      Xs,
+      Ws,
+      K,
+      N,
+      M,
+      k_partition_size,
+      tid,
+      lid,
+      simd_gid,
+      simd_lid);
 }
 
 template <

@@ -5,8 +5,8 @@
 #include <metal_simdgroup>
 #include <metal_stdlib>
 
-#include "mlx/backend/metal/kernels/fp4.h"
-#include "mlx/backend/metal/kernels/fp8.h"
+#include "fp4.h"
+#include "fp8.h"
 
 enum class QuantMode { Affine, Mxfp4, Mxfp8, Nvfp4 };
 

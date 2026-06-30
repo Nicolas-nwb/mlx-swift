@@ -2,8 +2,8 @@
 
 #include <metal_simdgroup>
 
-#include "mlx/backend/metal/kernels/fp_quantized.h"
-#include "mlx/backend/metal/kernels/quantized_utils.h"
+#include "quantized_utils.h"
+#include "fp_quantized.h"
 
 using namespace metal;
 
@@ -200,10 +200,6 @@ constant int q_seq_len [[function_constant(31)]];
 constant bool apply_wht_inline [[function_constant(32)]];
 
 // Task #22 : flags de bisection pour isoler la phase R3 qui produit nan en prod.
-// Activés via env vars MLX_R3_BYPASS_Q=1 / MLX_R3_BYPASS_OUT=1 côté Swift.
-// Quand bypass_q_wht=true, le kernel skip le butterfly Q-side (Phase 1-4 Q).
-// Quand bypass_out_wht=true, le kernel prend le path baseline reduction
-// + writeback au lieu du Phase 1-4 output-side WHT_inv.
 constant bool bypass_q_wht [[function_constant(33)]];
 constant bool bypass_out_wht [[function_constant(34)]];
 
@@ -530,7 +526,6 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
   // Le `commit 3` ajoute la transformation inverse sur o[] avant l'ecriture.
   // L'ordre des butterflies (intra puis cross) reproduit le pattern Cooley-
   // Tukey de l'implementation MLX `hadamardTransform` (cf. Annexe B memo R3).
-  // Task #22 : bypass_q_wht=true skip ce bloc pour bisection prod nan.
   if (apply_wht_inline && !bypass_q_wht) {
     const int q_base = local_quad_lid * elem_per_thread;
 
@@ -672,7 +667,6 @@ METAL_FUNC void quant_sdpa_vector_2pass_1_impl(
   // par signs, on normalise, puis writeback.
   // Reuse de q[] economise un second tableau de elem_per_thread fp32 (256 octets
   // pour D=512 BD=8) qui aurait sature les registres.
-  // Task #22 : bypass_out_wht=true force le path baseline (else branch).
   if (apply_wht_inline && !bypass_out_wht) {
     // Phase 1 : reduction cross-quad dans q[] (au lieu de val temporaire).
 #pragma clang loop unroll(full)
@@ -810,6 +804,9 @@ template <typename T, int D>
   QUANT_SDPA_DISPATCH(Affine, 32, 4)
   QUANT_SDPA_DISPATCH(Affine, 32, 6)
   QUANT_SDPA_DISPATCH(Affine, 32, 8)
+  QUANT_SDPA_DISPATCH(Affine, 64, 4)
+  QUANT_SDPA_DISPATCH(Affine, 64, 6)
+  QUANT_SDPA_DISPATCH(Affine, 64, 8)
   QUANT_SDPA_DISPATCH(Mxfp4, 32, 4)
   QUANT_SDPA_DISPATCH(Nvfp4, 16, 4)
   QUANT_SDPA_DISPATCH(Mxfp8, 32, 8)
